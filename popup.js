@@ -46,7 +46,6 @@ function formatDateDisplay(dateStr) {
 
   if (parts.length === 3) {
     var mi = parseInt(parts[1], 10) - 1;
-
     return months[mi] + " " + parseInt(parts[2], 10) + ", " + parts[0];
   }
 
@@ -132,6 +131,61 @@ function getApprovalType(sub) {
   }
 
   return "N/A";
+}
+
+
+function shouldSkipApprovalType(approvalType) {
+  var text = String(approvalType || "")
+    .trim()
+    .toUpperCase();
+
+  /*
+    Keep only approval types that are clinically relevant based on the current business rule.
+
+    Keep:
+    - EFFICACY
+    - TYPE
+    - NULL
+    - N/A
+    - blank values
+
+    Skip everything else:
+    - Labeling
+    - Manufacturing
+    - CMC
+    - Administrative
+    - REMS
+    - Other non-target approval actions
+  */
+
+  // Keep blank approval types
+  if (text === "") {
+    return false;
+  }
+
+  // Keep null-like approval types
+  if (text === "NULL") {
+    return false;
+  }
+
+  // Keep N/A approval types
+  if (text === "N/A") {
+    return false;
+  }
+
+  // Keep efficacy-related approval types
+  if (text.indexOf("EFFICACY") !== -1) {
+    return false;
+  }
+
+  // Keep type-based approval classifications
+  // Examples: Type 1, Type 2, Type 3, Type 4, Type 5, Type 6
+  if (text.indexOf("TYPE") !== -1) {
+    return false;
+  }
+
+  // Skip everything else
+  return true;
 }
 
 
@@ -368,6 +422,7 @@ function fetchAndDownload() {
         var openfda = drug.openfda || {};
         var appNum = drug.application_number || "Unknown";
 
+        // Skip generic ANDA approvals.
         if (appNum.toUpperCase().indexOf("ANDA") === 0) continue;
 
         for (var j = 0; j < submissions.length; j++) {
@@ -384,6 +439,13 @@ function fetchAndDownload() {
             subInt < parseInt(fdaFrom, 10) ||
             subInt > parseInt(fdaTo, 10)
           ) {
+            continue;
+          }
+
+          var approvalType = getApprovalType(sub);
+
+          // Skip labeling/labelling-only approval actions.
+          if (shouldSkipApprovalType(approvalType)) {
             continue;
           }
 
@@ -459,7 +521,7 @@ function fetchAndDownload() {
             approval_date_raw: subDate,
             application_number: appNum,
             submission_type: subTypeDesc,
-            approval_type: getApprovalType(sub),
+            approval_type: approvalType,
             sponsor: drug.sponsor_name || "Unknown",
             dosage_form: dosageForm,
             route: route,
@@ -471,7 +533,7 @@ function fetchAndDownload() {
       }
 
       if (approvals.length === 0) {
-        setStatus("error", "No approved drugs found in range.");
+        setStatus("error", "No approved drugs found in range after filters.");
         btn.disabled = false;
 
         if (masterBtn) {
@@ -748,7 +810,9 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
 
   xml += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>\n';
 
-
+  xml += '<Row>\n';
+  xml += '  <Cell ss:StyleID="section" ss:MergeAcross="1"><Data ss:Type="String">Approvals by Submission Type</Data></Cell>\n';
+  xml += '</Row>\n';
 
   xml += '<Row>\n';
   xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Submission Type</Data></Cell>\n';
@@ -813,8 +877,6 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   }
 
   xml += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>\n';
-
-
 
   xml += '<Row>\n';
   xml += '  <Cell ss:StyleID="section" ss:MergeAcross="1"><Data ss:Type="String">Top Sponsors</Data></Cell>\n';
