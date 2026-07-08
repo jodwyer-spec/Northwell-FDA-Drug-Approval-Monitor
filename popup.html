@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      width: 340px;
+      padding: 0;
+      margin: 0;
+      font-family: Arial, sans-serif;
+      color: #333;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #0078d4, #00a4ef);
+      color: white;
+      padding: 16px 20px;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .header p {
+      margin: 4px 0 0 0;
+      font-size: 11px;
+      opacity: 0.9;
+    }
+
+    .body-content {
+      padding: 16px 20px;
+    }
+
+    .date-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .date-group {
+      flex: 1;
+    }
+
+    .date-group label {
+      display: block;
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 4px;
+      font-weight: bold;
+    }
+
+    .date-group input {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    .btn-primary {
+      background: #0078d4;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #006abc;
+    }
+
+    .btn-primary:disabled {
+      background: #999;
+      cursor: not-allowed;
+    }
+
+    .btn-master {
+      background: #28A745;
+      color: white;
+    }
+
+    .btn-master:hover {
+      background: #218838;
+    }
+
+    .status {
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      display: none;
+    }
+
+    .status.loading {
+      display: block;
+      background: #e3f2fd;
+      color: #1565c0;
+    }
+
+    .status.success {
+      display: block;
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+
+    .status.error {
+      display: block;
+      background: #fce4ec;
+      color: #c62828;
+    }
+
+    .info {
+      margin-top: 12px;
+      font-size: 11px;
+      color: #999;
+      border-top: 1px solid #eee;
+      padding-top: 10px;
+      line-height: 1.4;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #1565c0;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <h1>FDA Drug Approval Report</h1>
+    <p>Download the latest approvals as Excel</p>
+  </div>
+
+  <div class="body-content">
+    <div class="date-row">
+      <div class="date-group">
+        <label>FROM DATE</label>
+        <input type="date" id="dateFrom">
+      </div>
+
+      <div class="date-group">
+        <label>TO DATE</label>
+        <input type="date" id="dateTo">
+      </div>
+    </div>
+
+    <button class="btn btn-primary" id="downloadBtn">
+      Download Excel Report
+    </button>
+
+    <button class="btn btn-master" id="updateMasterBtn">
+      Download Master Report (2 Years)
+    </button>
+
+    <div class="status" id="status"></div>
+
+    <div class="info">
+      Data sourced live from the openFDA API.
+      Report includes drug name, approval date, submission type,
+      approval type, sponsor, dosage, route, indication, and specialty.
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
