@@ -161,31 +161,46 @@ function getSubmissionClassification(sub) {
   return code;
 }
 
-function shouldIncludeForFDAReport(sub) {
-  var code = cleanText(sub.submission_class_code);
-  var desc = cleanText(sub.submission_class_code_description);
-  var classification = getSubmissionClassification(sub);
+function shouldIncludeForFDAReport(sub) {  
+  var code = cleanText(sub.submission_class_code);  
+  var desc = cleanText(sub.submission_class_code_description);  
+  var combined = (code + " " + desc).toUpperCase().trim();
 
-  var combined = cleanText(code + " " + desc + " " + classification).toUpperCase();
+  // If blank/null/empty, include it  
+  if (!combined) return true;
 
-  if (
-    !combined ||
-    combined === "--" ||
-    combined === "N/A" ||
-    combined === "NULL" ||
-    combined === "UNDEFINED"
-  ) {
-    return true;
+  // Block list - these are minor administrative changes  
+  var blocked = [  
+    "LABELING",  
+    "REMS",  
+    "MANUF",  
+    "CMC",  
+    "PATENT",  
+    "EXCLUSIVITY",  
+    "ANNUAL REPORT",  
+    "STABILITY",  
+    "PROCESS",  
+    "SUPPLIER",  
+    "CONTAINER",  
+    "SPECIFICATION",  
+    "EXPIRATION",  
+    "IMPURITY",  
+    "METHOD",  
+    "DISSOLUTION",  
+    "EDITORIAL",  
+    "CBE",  
+    "PACKAGING"  
+  ];
+
+  for (var i = 0; i < blocked.length; i++) {  
+    if (combined.indexOf(blocked[i]) !== -1) {  
+      return false;  
+    }  
   }
 
-  if (combined.indexOf("EFFICACY") === 0) return true;
-  if (combined.indexOf("TYPE") === 0) return true;
-
-  if (combined.indexOf(" EFFICACY") !== -1) return true;
-  if (combined.indexOf(" TYPE") !== -1) return true;
-
-  return false;
-}
+  // Everything else gets included  
+  return true;  
+}  
 
 function deriveSubmissionType(applicationNumber, submissionType) {
   var app = cleanText(applicationNumber).toUpperCase();
@@ -1077,16 +1092,17 @@ function generateFDAExcel(approvals, fromDate, toDate) {
   xml += '<Cell ss:StyleID="header"><Data ss:Type="String">Value</Data></Cell>\n';
   xml += '</Row>\n';
 
-  var notes = [
-    ["Report Type", "FDA Drug Approval Report"],
-    ["Date Range", formatDateDisplay(fromDate) + " to " + formatDateDisplay(toDate)],
-    ["Total Included Rows", String(approvals.length)],
-    ["Primary Source", "openFDA Drugs@FDA endpoint"],
-    ["Supplemental Source", "openFDA Product Labeling endpoint for indication text"],
-    ["Included Submission Classifications", "Efficacy, Type classifications, and blank/null/-- classifications"],
-    ["Excluded Submission Classifications", "LABELING, REMS, MANUF (CMC), and other non-target classifications"],
-    ["Excluded Application Type", "ANDA records are excluded by default"]
-  ];
+    var notes = [  
+    ["Report Type", "FDA Drug Approval Report"],  
+    ["Date Range", formatDateDisplay(fromDate) + " to " + formatDateDisplay(toDate)],  
+    ["Total Included Rows", String(approvals.length)],  
+    ["Primary Source", "openFDA Drugs@FDA endpoint"],  
+    ["Supplemental Source", "openFDA Product Labeling endpoint for indication text"],  
+    ["Inclusion Logic", "All approved submissions EXCEPT known administrative types"],  
+    ["Excluded Classifications", "LABELING, REMS, MANUF/CMC, PATENT, EXCLUSIVITY, PACKAGING, EDITORIAL, CBE, STABILITY, ANNUAL REPORT"],  
+    ["Excluded Application Type", "ANDA records are excluded by default"],  
+    ["Note", "The FDA API has a 2-5 day indexing delay. For complete results, run 5-7 days after the target period ends."]  
+  ];  
 
   for (var n = 0; n < notes.length; n++) {
     xml += '<Row>\n';
