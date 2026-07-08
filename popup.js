@@ -46,6 +46,7 @@ function formatDateDisplay(dateStr) {
 
   if (parts.length === 3) {
     var mi = parseInt(parts[1], 10) - 1;
+
     return months[mi] + " " + parseInt(parts[2], 10) + ", " + parts[0];
   }
 
@@ -66,57 +67,95 @@ function setStatus(type, message) {
 }
 
 
-function fetchIndication(appNumber) {
-  var url =
-    "https://api.fda.gov/drug/label.json?" +
-    "search=openfda.application_number:\"" +
-    appNumber +
-    "\"&limit=1";
+function escapeXml(str) {
+  if (str === null || str === undefined) return "";
 
-  return fetch(url)
-    .then(function (response) {
-      if (!response.ok) return "N/A";
-
-      return response.json().then(function (data) {
-        var results = data.results || [];
-
-        if (results.length > 0) {
-          var label = results[0];
-
-          var ind = label.indications_and_usage || [];
-
-          if (ind.length > 0 && ind[0]) {
-            var text = ind[0];
-
-            if (text.length > 500) {
-              text = text.substring(0, 500) + "...";
-            }
-
-            return text;
-          }
-
-          var purp = label.purpose || [];
-
-          if (purp.length > 0 && purp[0]) {
-            return purp[0];
-          }
-        }
-
-        return "N/A";
-      });
-    })
-    .catch(function () {
-      return "N/A";
-    });
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 
-function getApprovalType(sub) {
-  var code = sub.submission_class_code || "";
-  var desc = sub.submission_class_code_description || "";
+function cleanValue(value, fallback) {
+  if (value === null || value === undefined) return fallback || "N/A";
 
-  code = String(code).trim();
-  desc = String(desc).trim();
+  var text = String(value).trim();
+
+  if (!text) return fallback || "N/A";
+
+  return text;
+}
+
+
+function firstArrayValue(value, fallback) {
+  if (Array.isArray(value) && value.length > 0 && value[0]) {
+    return cleanValue(value[0], fallback || "N/A");
+  }
+
+  return fallback || "N/A";
+}
+
+
+function getQuarterFromDate(rawDate) {
+  if (!rawDate || rawDate.length < 6) return "N/A";
+
+  var month = parseInt(rawDate.substring(4, 6), 10);
+
+  if (month >= 1 && month <= 3) return "Q1";
+  if (month >= 4 && month <= 6) return "Q2";
+  if (month >= 7 && month <= 9) return "Q3";
+  if (month >= 10 && month <= 12) return "Q4";
+
+  return "N/A";
+}
+
+
+function getYearFromDate(rawDate) {
+  if (!rawDate || rawDate.length < 4) return "N/A";
+
+  return rawDate.substring(0, 4);
+}
+
+
+function normalizeRoute(routeText) {
+  var text = String(routeText || "")
+    .trim()
+    .toUpperCase();
+
+  if (!text) return "N/A";
+
+  if (text.indexOf("SUBCUTANEOUS") !== -1 || text === "SC" || text === "SUBQ") {
+    return "SUBQ";
+  }
+
+  if (text.indexOf("INTRAVENOUS") !== -1 || text === "IV") {
+    return "IV";
+  }
+
+  if (text.indexOf("ORAL") !== -1 || text === "PO") {
+    return "Oral";
+  }
+
+  if (
+    text.indexOf("INJECTION") !== -1 ||
+    text.indexOf("INJECTABLE") !== -1 ||
+    text.indexOf("INTRAMUSCULAR") !== -1 ||
+    text.indexOf("INTRAOCULAR") !== -1 ||
+    text.indexOf("INTRAVITREAL") !== -1
+  ) {
+    return "Injectable Other";
+  }
+
+  return routeText || "N/A";
+}
+
+
+function getRawSubmissionClassText(sub) {
+  var code = String(sub.submission_class_code || "").trim();
+  var desc = String(sub.submission_class_code_description || "").trim();
 
   if (code && desc) {
     return code + " - " + desc;
@@ -130,135 +169,228 @@ function getApprovalType(sub) {
     return code;
   }
 
+  return "";
+}
+
+
+function getApprovalType(sub) {
+  var raw = getRawSubmissionClassText(sub);
+
+  if (raw) {
+    return raw;
+  }
+
   return "N/A";
 }
 
 
-function shouldSkipApprovalType(approvalType) {
-  var text = String(approvalType || "")
-    .trim()
-    .toUpperCase();
+function getMaddieSubmissionClassification(sub, appNum) {
+  var raw = getRawSubmissionClassText(sub);
+  var text = raw.toUpperCase();
 
-  /*
-    Keep only approval types that are clinically relevant based on the current business rule.
-
-    Keep:
-    - EFFICACY
-    - TYPE
-    - NULL
-    - N/A
-    - blank values
-
-    Skip everything else:
-    - Labeling
-    - Manufacturing
-    - CMC
-    - Administrative
-    - REMS
-    - Other non-target approval actions
-  */
-
-  // Keep blank approval types
-  if (text === "") {
-    return false;
-  }
-
-  // Keep null-like approval types
-  if (text === "NULL") {
-    return false;
-  }
-
-  // Keep N/A approval types
-  if (text === "N/A") {
-    return false;
-  }
-
-  // Keep efficacy-related approval types
   if (text.indexOf("EFFICACY") !== -1) {
-    return false;
+    return "Efficacy-New Indication";
   }
 
-  // Keep type-based approval classifications
-  // Examples: Type 1, Type 2, Type 3, Type 4, Type 5, Type 6
-  if (text.indexOf("TYPE") !== -1) {
-    return false;
+  if (text.indexOf("TYPE 1") !== -1) {
+    return "Type 1 - New Molecular Entity";
   }
 
-  // Skip everything else
-  return true;
+  if (text.indexOf("TYPE 2") !== -1) {
+    return "Type 2 - New Active Ingredient";
+  }
+
+  if (text.indexOf("TYPE 3") !== -1) {
+    return "Type 3 - New Dosage Form";
+  }
+
+  if (text.indexOf("TYPE 4") !== -1) {
+    return "Type 4 - New Combination";
+  }
+
+  if (text.indexOf("TYPE 5") !== -1) {
+    return "Type 5 - New Formulation or New Manufacturer";
+  }
+
+  if (text.indexOf("TYPE 6") !== -1) {
+    return "Type 6 - New Indication";
+  }
+
+  if (text.indexOf("TYPE 7") !== -1) {
+    return "Type 7 - Previously Marketed without Approved NDA";
+  }
+
+  // Maddie's manual sheet uses -- for many biologic / BLA / sBLA rows.
+  if (String(appNum || "").toUpperCase().indexOf("BLA") === 0) {
+    return "--";
+  }
+
+  if (!raw) {
+    return "--";
+  }
+
+  return raw;
 }
 
 
-function mapIndicationToSpecialty(indication, drugName) {
-  var text = (indication + " " + drugName).toLowerCase();
+function shouldIncludeMaddieRow(sub, appNum) {
+  var raw = getRawSubmissionClassText(sub).toUpperCase();
+  var app = String(appNum || "").toUpperCase();
+  var subType = String(sub.submission_type || "").toUpperCase();
+
+  // Keep clinically meaningful classification types.
+  if (raw.indexOf("EFFICACY") !== -1) {
+    return true;
+  }
+
+  if (raw.indexOf("TYPE") !== -1) {
+    return true;
+  }
+
+  // Keep BLA and sBLA style rows because Maddie has many -- classification rows for biologics.
+  if (app.indexOf("BLA") === 0) {
+    return true;
+  }
+
+  // Keep original NDA approvals unless they are clearly administrative / maintenance only.
+  if (app.indexOf("NDA") === 0 && subType === "ORIG") {
+    if (raw.indexOf("LABEL") !== -1) return false;
+    if (raw.indexOf("REMS") !== -1) return false;
+    if (raw.indexOf("MANUF") !== -1) return false;
+    if (raw.indexOf("CMC") !== -1) return false;
+
+    return true;
+  }
+
+  // Keep supplements only if they are efficacy/type-based.
+  return false;
+}
+
+
+function mapSubmissionType(appNum, subType) {
+  var app = String(appNum || "").toUpperCase();
+  var type = String(subType || "").toUpperCase();
+
+  if (app.indexOf("BLA") === 0) {
+    if (type === "ORIG") return "BLA";
+    if (type === "SUPPL") return "sBLA";
+    return "BLA";
+  }
+
+  if (app.indexOf("NDA") === 0) {
+    if (type === "ORIG") return "NDA";
+    if (type === "SUPPL") return "sNDA";
+    return "NDA";
+  }
+
+  if (app.indexOf("ANDA") === 0) {
+    if (type === "ORIG") return "ANDA";
+    if (type === "SUPPL") return "sANDA";
+    return "ANDA";
+  }
+
+  if (type === "ORIG") return "NDA";
+  if (type === "SUPPL") return "sNDA";
+  if (type === "ABBR") return "ANDA";
+
+  return type || "N/A";
+}
+
+
+function mapIndicationToSpecialty(indication, drugName, pharmClassText) {
+  var text = (
+    String(indication || "") + " " +
+    String(drugName || "") + " " +
+    String(pharmClassText || "")
+  ).toLowerCase();
 
   var mapping = {
-    "hypertension": "Cardiology",
-    "heart failure": "Cardiology",
-    "cardiac": "Cardiology",
-    "cardiovascular": "Cardiology",
-    "angina": "Cardiology",
-    "arrhythmia": "Cardiology",
-    "atrial fibrillation": "Cardiology",
-    "blood pressure": "Cardiology",
+    "plaque psoriasis": "Dermatology",
+    "psoriasis": "Dermatology",
+    "dermatitis": "Dermatology",
+    "eczema": "Dermatology",
+    "acne": "Dermatology",
+    "risankizumab": "Dermatology",
+
+    "hemophilia": "Hematology",
+    "bleeding": "Hematology",
+    "factor viii": "Hematology",
+    "factor ix": "Hematology",
+    "marstacimab": "Hematology",
 
     "cancer": "Oncology",
     "tumor": "Oncology",
     "carcinoma": "Oncology",
     "lymphoma": "Oncology",
     "leukemia": "Oncology",
-    "melanoma": "Oncology / Dermatology",
+    "melanoma": "Oncology",
     "metastatic": "Oncology",
+    "neoplasm": "Oncology",
+    "chemotherapy": "Oncology",
+    "breast cancer": "Oncology",
+    "tnbc": "Oncology",
+    "pembrolizumab": "Oncology",
+    "keytruda": "Oncology",
+    "trodelvy": "Oncology",
+    "trastuzumab": "Oncology",
+    "palbociclib": "Oncology",
+    "ibrance": "Oncology",
+    "belzutifan": "Oncology",
+    "capivasertib": "Oncology",
 
+    "neuromyelitis": "Neurology",
     "seizure": "Neurology",
     "epilepsy": "Neurology",
+    "spasticity": "Neurology",
+    "cerebral palsy": "Neurology",
     "neurological": "Neurology",
-    "anticonvulsant": "Neurology",
+    "eculizumab": "Neurology",
+    "xeomin": "Neurology",
 
-    "schizophrenia": "Psychiatry",
-    "bipolar": "Psychiatry",
-    "antipsychotic": "Psychiatry",
-    "depression": "Psychiatry",
+    "thyroid eye disease": "Ophthalmology",
+    "macular": "Ophthalmology",
+    "retinal": "Ophthalmology",
+    "diabetic retinopathy": "Ophthalmology",
+    "ranibizumab": "Ophthalmology",
+    "ophthalmic": "Ophthalmology",
 
-    "acne": "Dermatology",
-    "dermatitis": "Dermatology",
-    "psoriasis": "Dermatology",
-    "eczema": "Dermatology",
-
-    "asthma": "Pulmonology",
-    "copd": "Pulmonology",
-    "pulmonary": "Pulmonology",
-    "respiratory": "Pulmonology",
-
+    "psoriatic arthritis": "Rheumatology",
     "arthritis": "Rheumatology",
     "rheumatoid": "Rheumatology",
     "lupus": "Rheumatology",
 
-    "glaucoma": "Ophthalmology",
-    "ophthalmic": "Ophthalmology",
-    "retinal": "Ophthalmology",
+    "mri": "Radiology",
+    "magnetic resonance": "Radiology",
+    "contrast": "Radiology",
+    "imaging": "Radiology",
+    "gadoquatrane": "Radiology",
 
-    "liver": "Gastroenterology",
-    "hepatic": "Gastroenterology",
-    "gastrointestinal": "Gastroenterology",
+    "urinary tract": "Urology",
+    "cystinuria": "Urology",
+    "cystine stone": "Urology",
+    "pyelonephritis": "Urology",
+    "tiopronin": "Urology",
+    "tebipenem": "Urology",
 
-    "renal": "Nephrology",
-    "kidney": "Nephrology",
-
-    "diabetes": "Endocrinology",
-    "thyroid": "Endocrinology",
-    "osteoporosis": "Endocrinology",
+    "hypertriglyceridemia": "Endocrinology / Metabolic",
+    "triglycerides": "Endocrinology / Metabolic",
+    "hypoglycemia": "Endocrinology / Metabolic",
+    "diabetes": "Endocrinology / Metabolic",
+    "insulin": "Endocrinology / Metabolic",
+    "thyroid": "Endocrinology / Metabolic",
+    "teplizumab": "Endocrinology / Metabolic",
+    "dasiglucagon": "Endocrinology / Metabolic",
+    "olezarsen": "Endocrinology / Metabolic",
 
     "infection": "Infectious Disease",
     "antibacterial": "Infectious Disease",
-    "antiviral": "Infectious Disease",
     "antibiotic": "Infectious Disease",
+    "antiviral": "Infectious Disease",
 
-    "naloxone": "Emergency Medicine",
-    "opioid": "Emergency Medicine",
-
-    "contrast": "Radiology",
-    "imaging": "Radiology",
+    "heart failure": "Cardiology",
+    "hypertension": "Cardiology",
+    "cardiac": "Cardiology",
+    "cardiovascular": "Cardiology",
 
     "pregnancy": "OB/GYN",
     "contracepti": "OB/GYN",
@@ -275,43 +407,198 @@ function mapIndicationToSpecialty(indication, drugName) {
 }
 
 
-function escapeXml(str) {
-  if (!str) return "";
+function fetchLabelProfile(appNumber) {
+  var query =
+    "openfda.application_number:\"" +
+    appNumber +
+    "\"";
 
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
+  var url =
+    "https://api.fda.gov/drug/label.json?search=" +
+    encodeURIComponent(query) +
+    "&limit=1";
 
-
-function loadMasterData() {
-  return new Promise(function (resolve) {
-    chrome.storage.local.get(["masterApprovals"], function (result) {
-      resolve(result.masterApprovals || []);
-    });
-  });
-}
-
-
-function saveMasterData(data) {
-  return new Promise(function (resolve) {
-    chrome.storage.local.set(
-      {
-        masterApprovals: data
-      },
-      function () {
-        resolve();
+  return fetch(url)
+    .then(function (response) {
+      if (!response.ok) {
+        return {};
       }
-    );
-  });
+
+      return response.json();
+    })
+    .then(function (data) {
+      var results = data.results || [];
+
+      if (results.length === 0) {
+        return {};
+      }
+
+      var label = results[0];
+      var openfda = label.openfda || {};
+
+      var indication = "N/A";
+
+      if (
+        label.indications_and_usage &&
+        label.indications_and_usage.length > 0
+      ) {
+        indication = label.indications_and_usage[0] || "N/A";
+      } else if (
+        label.purpose &&
+        label.purpose.length > 0
+      ) {
+        indication = label.purpose[0] || "N/A";
+      }
+
+      if (indication.length > 900) {
+        indication = indication.substring(0, 900) + "...";
+      }
+
+      var route = firstArrayValue(openfda.route, "");
+      var manufacturer = firstArrayValue(openfda.manufacturer_name, "");
+      var brandName = firstArrayValue(openfda.brand_name, "");
+      var genericName = firstArrayValue(openfda.generic_name, "");
+
+      var classParts = [];
+
+      if (openfda.pharm_class_epc) {
+        classParts = classParts.concat(openfda.pharm_class_epc);
+      }
+
+      if (openfda.pharm_class_moa) {
+        classParts = classParts.concat(openfda.pharm_class_moa);
+      }
+
+      if (openfda.pharm_class_pe) {
+        classParts = classParts.concat(openfda.pharm_class_pe);
+      }
+
+      if (openfda.pharm_class_cs) {
+        classParts = classParts.concat(openfda.pharm_class_cs);
+      }
+
+      return {
+        indication: cleanValue(indication, "N/A"),
+        route: cleanValue(route, ""),
+        manufacturer: cleanValue(manufacturer, ""),
+        brand_name: cleanValue(brandName, ""),
+        generic_name: cleanValue(genericName, ""),
+        pharm_class_text: classParts.join("; ")
+      };
+    })
+    .catch(function () {
+      return {};
+    });
 }
 
 
-function createApprovalKey(approval) {
-  return approval.application_number + "_" + approval.approval_date_raw;
+function fetchNdcProfile(appNumber) {
+  var query =
+    "application_number:\"" +
+    appNumber +
+    "\"";
+
+  var url =
+    "https://api.fda.gov/drug/ndc.json?search=" +
+    encodeURIComponent(query) +
+    "&limit=1";
+
+  return fetch(url)
+    .then(function (response) {
+      if (!response.ok) {
+        return {};
+      }
+
+      return response.json();
+    })
+    .then(function (data) {
+      var results = data.results || [];
+
+      if (results.length === 0) {
+        return {};
+      }
+
+      var ndc = results[0];
+
+      var ingredients = "N/A";
+
+      if (
+        ndc.active_ingredients &&
+        ndc.active_ingredients.length > 0
+      ) {
+        var parts = [];
+
+        for (var i = 0; i < ndc.active_ingredients.length; i++) {
+          var item = ndc.active_ingredients[i];
+          var name = item.name || "Unknown";
+          var strength = item.strength || "";
+
+          if (strength) {
+            parts.push(name + " (" + strength + ")");
+          } else {
+            parts.push(name);
+          }
+        }
+
+        ingredients = parts.join("; ");
+      }
+
+      var route = "N/A";
+
+      if (ndc.route && ndc.route.length > 0) {
+        route = ndc.route.join(" / ");
+      }
+
+      return {
+        manufacturer: cleanValue(ndc.labeler_name, ""),
+        dosage_form: cleanValue(ndc.dosage_form, ""),
+        route: cleanValue(route, ""),
+        active_ingredients: cleanValue(ingredients, "")
+      };
+    })
+    .catch(function () {
+      return {};
+    });
+}
+
+
+function getProductBasics(products) {
+  var drugName = "Unknown";
+  var dosageForm = "Unknown";
+  var route = "Unknown";
+  var ingredients = "N/A";
+
+  if (products.length > 0) {
+    drugName = products[0].brand_name || "Unknown";
+    dosageForm = products[0].dosage_form || "Unknown";
+    route = products[0].route || "Unknown";
+
+    var ais = products[0].active_ingredients || [];
+
+    if (ais.length > 0) {
+      var parts = [];
+
+      for (var k = 0; k < ais.length; k++) {
+        var aiName = ais[k].name || "Unknown";
+        var aiStr = ais[k].strength || "";
+
+        if (aiStr) {
+          parts.push(aiName + " (" + aiStr + ")");
+        } else {
+          parts.push(aiName);
+        }
+      }
+
+      ingredients = parts.join("; ");
+    }
+  }
+
+  return {
+    drug_name: drugName,
+    dosage_form: dosageForm,
+    route: route,
+    active_ingredients: ingredients
+  };
 }
 
 
@@ -364,7 +651,7 @@ function fetchAndDownload() {
   var fdaFrom = formatDateFDA(fromDate);
   var fdaTo = formatDateFDA(toDate);
 
-  setStatus("loading", "Fetching FDA approvals...");
+  setStatus("loading", "Fetching Drugs@FDA approvals...");
 
   var url =
     "https://api.fda.gov/drug/drugsfda.json?" +
@@ -376,6 +663,7 @@ function fetchAndDownload() {
     .then(function (response) {
       if (response.status === 404) {
         setStatus("error", "No approvals found for this date range.");
+
         btn.disabled = false;
 
         if (masterBtn) {
@@ -391,13 +679,14 @@ function fetchAndDownload() {
 
       return response.json();
     })
-    .then(function (data) {
+    .then(async function (data) {
       if (!data) return;
 
       var results = data.results || [];
 
       if (results.length === 0) {
         setStatus("error", "No drug records found.");
+
         btn.disabled = false;
 
         if (masterBtn) {
@@ -409,11 +698,13 @@ function fetchAndDownload() {
 
       setStatus(
         "loading",
-        "Processing " + results.length + " drug record(s)..."
+        "Processing " + results.length + " FDA record(s)..."
       );
 
       var approvals = [];
       var seen = {};
+      var labelProfiles = {};
+      var ndcProfiles = {};
 
       for (var i = 0; i < results.length; i++) {
         var drug = results[i];
@@ -421,9 +712,12 @@ function fetchAndDownload() {
         var products = drug.products || [];
         var openfda = drug.openfda || {};
         var appNum = drug.application_number || "Unknown";
+        var appUpper = appNum.toUpperCase();
 
-        // Skip generic ANDA approvals.
-        if (appNum.toUpperCase().indexOf("ANDA") === 0) continue;
+        // Maddie does not want generics/ANDA rows.
+        if (appUpper.indexOf("ANDA") === 0) continue;
+
+        var productBasics = getProductBasics(products);
 
         for (var j = 0; j < submissions.length; j++) {
           var sub = submissions[j];
@@ -442,48 +736,22 @@ function fetchAndDownload() {
             continue;
           }
 
-          var approvalType = getApprovalType(sub);
-
-          // Skip labeling/labelling-only approval actions.
-          if (shouldSkipApprovalType(approvalType)) {
+          if (!shouldIncludeMaddieRow(sub, appNum)) {
             continue;
           }
 
-          var key = appNum + "_" + subDate + "_" + (sub.submission_number || j);
+          var key =
+            appNum +
+            "_" +
+            subDate +
+            "_" +
+            (sub.submission_number || j) +
+            "_" +
+            getRawSubmissionClassText(sub);
 
           if (seen[key]) continue;
 
           seen[key] = true;
-
-          var drugName = "Unknown";
-          var dosageForm = "Unknown";
-          var route = "Unknown";
-          var ingredients = "N/A";
-
-          if (products.length > 0) {
-            drugName = products[0].brand_name || "Unknown";
-            dosageForm = products[0].dosage_form || "Unknown";
-            route = products[0].route || "Unknown";
-
-            var ais = products[0].active_ingredients || [];
-
-            if (ais.length > 0) {
-              var parts = [];
-
-              for (var k = 0; k < ais.length; k++) {
-                var aiName = ais[k].name || "Unknown";
-                var aiStr = ais[k].strength || "";
-
-                if (aiStr) {
-                  parts.push(aiName + " (" + aiStr + ")");
-                } else {
-                  parts.push(aiName);
-                }
-              }
-
-              ingredients = parts.join("; ");
-            }
-          }
 
           var genericName = "Unknown";
           var gNames = openfda.generic_name || [];
@@ -492,48 +760,34 @@ function fetchAndDownload() {
             genericName = gNames[0];
           }
 
-          var subType = sub.submission_type || "Unknown";
-          var subTypeDesc = subType;
-
-          if (subType === "ORIG") {
-            subTypeDesc = "New Drug Application";
-          } else if (subType === "SUPPL") {
-            subTypeDesc = "Supplemental";
-          } else if (subType === "ABBR") {
-            subTypeDesc = "Abbreviated (Generic)";
-          }
-
-          var dateDisplay = subDate;
-
-          if (subDate.length === 8) {
-            dateDisplay =
-              subDate.substring(4, 6) +
-              "/" +
-              subDate.substring(6, 8) +
-              "/" +
-              subDate.substring(0, 4);
-          }
-
           approvals.push({
-            drug_name: drugName,
-            generic_name: genericName,
-            approval_date: dateDisplay,
-            approval_date_raw: subDate,
             application_number: appNum,
-            submission_type: subTypeDesc,
-            approval_type: approvalType,
-            sponsor: drug.sponsor_name || "Unknown",
-            dosage_form: dosageForm,
-            route: route,
-            active_ingredients: ingredients,
+            manufacturer: drug.sponsor_name || "Unknown",
+            drug_name: productBasics.drug_name,
+            generic_name: genericName,
+            submission_type: mapSubmissionType(appNum, sub.submission_type),
+            therapeutic_specialty_category: "",
             indication: "",
-            specialty: ""
+            route_of_admin: normalizeRoute(productBasics.route),
+            approval_date: formatDateFromRaw(subDate),
+            approval_date_raw: subDate,
+            approval_quarter: getQuarterFromDate(subDate),
+            approval_year: getYearFromDate(subDate),
+            submission_classification: getMaddieSubmissionClassification(sub, appNum),
+            approval_type: getApprovalType(sub),
+            sponsor: drug.sponsor_name || "Unknown",
+            dosage_form: productBasics.dosage_form,
+            active_ingredients: productBasics.active_ingredients
           });
         }
       }
 
       if (approvals.length === 0) {
-        setStatus("error", "No approved drugs found in range after filters.");
+        setStatus(
+          "error",
+          "No Maddie-style approvals found in this date range after filters."
+        );
+
         btn.disabled = false;
 
         if (masterBtn) {
@@ -545,67 +799,100 @@ function fetchAndDownload() {
 
       setStatus(
         "loading",
-        "Fetching indications for " + approvals.length + " drug(s)..."
+        "Enriching " + approvals.length + " approval row(s) with label and NDC data..."
       );
 
-      var fetchedApps = {};
+      var appLookup = {};
 
       for (var a = 0; a < approvals.length; a++) {
-        var thisApp = approvals[a].application_number;
-
-        if (!fetchedApps[thisApp]) {
-          fetchedApps[thisApp] = fetchIndication(thisApp);
-        }
+        appLookup[approvals[a].application_number] = true;
       }
 
-      var appKeys = Object.keys(fetchedApps);
+      var appKeys = Object.keys(appLookup);
 
-      Promise.all(
-        appKeys.map(function (k) {
-          return fetchedApps[k];
+      await Promise.all(
+        appKeys.map(async function (appNumber) {
+          labelProfiles[appNumber] = await fetchLabelProfile(appNumber);
+          ndcProfiles[appNumber] = await fetchNdcProfile(appNumber);
         })
-      ).then(function (indResults) {
-        var indMap = {};
+      );
 
-        for (var x = 0; x < appKeys.length; x++) {
-          indMap[appKeys[x]] = indResults[x];
+      for (var b = 0; b < approvals.length; b++) {
+        var row = approvals[b];
+        var label = labelProfiles[row.application_number] || {};
+        var ndc = ndcProfiles[row.application_number] || {};
+
+        if (label.manufacturer && label.manufacturer !== "N/A") {
+          row.manufacturer = label.manufacturer;
+        } else if (ndc.manufacturer && ndc.manufacturer !== "N/A") {
+          row.manufacturer = ndc.manufacturer;
         }
 
-        for (var b = 0; b < approvals.length; b++) {
-          var ind =
-            indMap[approvals[b].application_number] || "N/A";
+        if (
+          (!row.indication || row.indication === "N/A") &&
+          label.indication
+        ) {
+          row.indication = label.indication;
+        }
 
-          approvals[b].indication = ind;
+        if (
+          (!row.route_of_admin || row.route_of_admin === "Unknown" || row.route_of_admin === "N/A") &&
+          label.route
+        ) {
+          row.route_of_admin = normalizeRoute(label.route);
+        }
 
-          approvals[b].specialty = mapIndicationToSpecialty(
-            ind,
-            approvals[b].drug_name
+        if (
+          (!row.route_of_admin || row.route_of_admin === "Unknown" || row.route_of_admin === "N/A") &&
+          ndc.route
+        ) {
+          row.route_of_admin = normalizeRoute(ndc.route);
+        }
+
+        if (
+          (!row.dosage_form || row.dosage_form === "Unknown" || row.dosage_form === "N/A") &&
+          ndc.dosage_form
+        ) {
+          row.dosage_form = ndc.dosage_form;
+        }
+
+        if (
+          (!row.active_ingredients || row.active_ingredients === "N/A") &&
+          ndc.active_ingredients
+        ) {
+          row.active_ingredients = ndc.active_ingredients;
+        }
+
+        row.therapeutic_specialty_category =
+          mapIndicationToSpecialty(
+            row.indication,
+            row.drug_name,
+            label.pharm_class_text
           );
+      }
+
+      approvals.sort(function (a, b) {
+        if (a.approval_date_raw !== b.approval_date_raw) {
+          return a.approval_date_raw.localeCompare(b.approval_date_raw);
         }
 
-        approvals.sort(function (a, b) {
-          if (a.approval_date_raw !== b.approval_date_raw) {
-            return a.approval_date_raw.localeCompare(b.approval_date_raw);
-          }
-
-          return a.drug_name.localeCompare(b.drug_name);
-        });
-
-        setStatus("loading", "Generating formatted report...");
-
-        generateFormattedExcel(approvals, fromDate, toDate);
-
-        setStatus(
-          "success",
-          "Downloaded " + approvals.length + " drug approval(s)."
-        );
-
-        btn.disabled = false;
-
-        if (masterBtn) {
-          masterBtn.disabled = false;
-        }
+        return a.drug_name.localeCompare(b.drug_name);
       });
+
+      setStatus("loading", "Generating Maddie-style Excel report...");
+
+      generateFormattedExcel(approvals, fromDate, toDate);
+
+      setStatus(
+        "success",
+        "Downloaded " + approvals.length + " Maddie-style approval row(s)."
+      );
+
+      btn.disabled = false;
+
+      if (masterBtn) {
+        masterBtn.disabled = false;
+      }
     })
     .catch(function (err) {
       setStatus("error", "Error: " + err.message);
@@ -619,39 +906,36 @@ function fetchAndDownload() {
 }
 
 
+function formatDateFromRaw(rawDate) {
+  if (!rawDate || rawDate.length !== 8) return rawDate || "N/A";
+
+  return (
+    rawDate.substring(4, 6) +
+    "/" +
+    rawDate.substring(6, 8) +
+    "/" +
+    rawDate.substring(0, 4)
+  );
+}
+
+
 function generateFormattedExcel(approvals, fromDate, toDate) {
-  var typeCounts = {};
-  var approvalTypeCounts = {};
-  var specCounts = {};
-  var sponsorCounts = {};
+  var specialtyCounts = {};
+  var submissionTypeCounts = {};
+  var classificationCounts = {};
 
   for (var i = 0; i < approvals.length; i++) {
-    var a = approvals[i];
+    var row = approvals[i];
 
-    typeCounts[a.submission_type] =
-      (typeCounts[a.submission_type] || 0) + 1;
+    specialtyCounts[row.therapeutic_specialty_category] =
+      (specialtyCounts[row.therapeutic_specialty_category] || 0) + 1;
 
-    approvalTypeCounts[a.approval_type] =
-      (approvalTypeCounts[a.approval_type] || 0) + 1;
+    submissionTypeCounts[row.submission_type] =
+      (submissionTypeCounts[row.submission_type] || 0) + 1;
 
-    specCounts[a.specialty] =
-      (specCounts[a.specialty] || 0) + 1;
-
-    sponsorCounts[a.sponsor] =
-      (sponsorCounts[a.sponsor] || 0) + 1;
+    classificationCounts[row.submission_classification] =
+      (classificationCounts[row.submission_classification] || 0) + 1;
   }
-
-  var specKeys = Object.keys(specCounts).sort(function (a, b) {
-    return specCounts[b] - specCounts[a];
-  });
-
-  var sponsorKeys = Object.keys(sponsorCounts).sort(function (a, b) {
-    return sponsorCounts[b] - sponsorCounts[a];
-  });
-
-  var approvalTypeKeys = Object.keys(approvalTypeCounts).sort(function (a, b) {
-    return approvalTypeCounts[b] - approvalTypeCounts[a];
-  });
 
   var xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
   xml += '<?mso-application progid="Excel.Sheet"?>\n';
@@ -667,23 +951,8 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   xml += '</Style>\n';
 
   xml += '<Style ss:ID="title">\n';
-  xml += '  <Font ss:FontName="Calibri" ss:Size="18" ss:Bold="1" ss:Color="#FFFFFF"/>\n';
+  xml += '  <Font ss:FontName="Calibri" ss:Size="16" ss:Bold="1" ss:Color="#FFFFFF"/>\n';
   xml += '  <Interior ss:Color="#0078D4" ss:Pattern="Solid"/>\n';
-  xml += '  <Alignment ss:Vertical="Center"/>\n';
-  xml += '</Style>\n';
-
-  xml += '<Style ss:ID="subtitle">\n';
-  xml += '  <Font ss:FontName="Calibri" ss:Size="12" ss:Color="#FFFFFF"/>\n';
-  xml += '  <Interior ss:Color="#0078D4" ss:Pattern="Solid"/>\n';
-  xml += '  <Alignment ss:Vertical="Center"/>\n';
-  xml += '</Style>\n';
-
-  xml += '<Style ss:ID="section">\n';
-  xml += '  <Font ss:FontName="Calibri" ss:Size="13" ss:Bold="1" ss:Color="#0078D4"/>\n';
-  xml += '  <Borders>\n';
-  xml += '    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#0078D4"/>\n';
-  xml += '  </Borders>\n';
-  xml += '  <Alignment ss:Vertical="Center"/>\n';
   xml += '</Style>\n';
 
   xml += '<Style ss:ID="header">\n';
@@ -695,6 +964,10 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   xml += '    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#005A9E"/>\n';
   xml += '    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#005A9E"/>\n';
   xml += '  </Borders>\n';
+  xml += '</Style>\n';
+
+  xml += '<Style ss:ID="section">\n';
+  xml += '  <Font ss:FontName="Calibri" ss:Size="13" ss:Bold="1" ss:Color="#0078D4"/>\n';
   xml += '</Style>\n';
 
   xml += '<Style ss:ID="data">\n';
@@ -718,83 +991,25 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   xml += '  </Borders>\n';
   xml += '</Style>\n';
 
-  xml += '<Style ss:ID="drugName">\n';
-  xml += '  <Font ss:FontName="Calibri" ss:Size="11" ss:Bold="1" ss:Color="#333333"/>\n';
-  xml += '  <Alignment ss:Vertical="Center"/>\n';
-  xml += '  <Borders>\n';
-  xml += '    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E0E0E0"/>\n';
-  xml += '    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E0E0E0"/>\n';
-  xml += '    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E0E0E0"/>\n';
-  xml += '  </Borders>\n';
-  xml += '</Style>\n';
-
-  xml += '<Style ss:ID="drugNameAlt">\n';
-  xml += '  <Font ss:FontName="Calibri" ss:Size="11" ss:Bold="1" ss:Color="#333333"/>\n';
-  xml += '  <Interior ss:Color="#F2F7FC" ss:Pattern="Solid"/>\n';
-  xml += '  <Alignment ss:Vertical="Center"/>\n';
-  xml += '  <Borders>\n';
-  xml += '    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E0E0E0"/>\n';
-  xml += '    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E0E0E0"/>\n';
-  xml += '    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E0E0E0"/>\n';
-  xml += '  </Borders>\n';
-  xml += '</Style>\n';
-
-  xml += '<Style ss:ID="infoLabel">\n';
-  xml += '  <Font ss:FontName="Calibri" ss:Size="11" ss:Bold="1" ss:Color="#555555"/>\n';
-  xml += '  <Alignment ss:Vertical="Center"/>\n';
-  xml += '</Style>\n';
-
-  xml += '<Style ss:ID="infoValue">\n';
-  xml += '  <Font ss:FontName="Calibri" ss:Size="11" ss:Color="#333333"/>\n';
-  xml += '  <Alignment ss:Vertical="Center"/>\n';
-  xml += '</Style>\n';
-
   xml += '<Style ss:ID="countNum">\n';
   xml += '  <Font ss:FontName="Calibri" ss:Size="11"/>\n';
   xml += '  <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>\n';
-  xml += '  <Borders>\n';
-  xml += '    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E0E0E0"/>\n';
-  xml += '  </Borders>\n';
-  xml += '</Style>\n';
-
-  xml += '<Style ss:ID="specGroup">\n';
-  xml += '  <Font ss:FontName="Calibri" ss:Size="12" ss:Bold="1" ss:Color="#FFFFFF"/>\n';
-  xml += '  <Interior ss:Color="#28A745" ss:Pattern="Solid"/>\n';
-  xml += '  <Alignment ss:Vertical="Center"/>\n';
   xml += '</Style>\n';
 
   xml += '</Styles>\n';
 
   xml += '<Worksheet ss:Name="Summary">\n';
-  xml += '<Table ss:DefaultRowHeight="20">\n';
-  xml += '<Column ss:Width="220"/>\n';
-  xml += '<Column ss:Width="320"/>\n';
+  xml += '<Table ss:DefaultRowHeight="22">\n';
+  xml += '<Column ss:Width="260"/>\n';
+  xml += '<Column ss:Width="90"/>\n';
 
-  xml += '<Row ss:Height="40">\n';
+  xml += '<Row ss:Height="35">\n';
   xml += '  <Cell ss:StyleID="title" ss:MergeAcross="1"><Data ss:Type="String">FDA Drug Approval Report</Data></Cell>\n';
   xml += '</Row>\n';
 
-  xml += '<Row ss:Height="25">\n';
-  xml += '  <Cell ss:StyleID="subtitle" ss:MergeAcross="1"><Data ss:Type="String">Northwell Health - Business Operations</Data></Cell>\n';
-  xml += '</Row>\n';
-
-  xml += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>\n';
-
   xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="infoLabel"><Data ss:Type="String">Report Generated:</Data></Cell>\n';
-  xml += '  <Cell ss:StyleID="infoValue"><Data ss:Type="String">' +
-    escapeXml(new Date().toLocaleDateString("en-US", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric"
-    })) +
-    '</Data></Cell>\n';
-  xml += '</Row>\n';
-
-  xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="infoLabel"><Data ss:Type="String">Date Range:</Data></Cell>\n';
-  xml += '  <Cell ss:StyleID="infoValue"><Data ss:Type="String">' +
+  xml += '  <Cell ss:StyleID="data"><Data ss:Type="String">Date Range</Data></Cell>\n';
+  xml += '  <Cell ss:StyleID="data"><Data ss:Type="String">' +
     escapeXml(formatDateDisplay(fromDate)) +
     " to " +
     escapeXml(formatDateDisplay(toDate)) +
@@ -802,8 +1017,8 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   xml += '</Row>\n';
 
   xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="infoLabel"><Data ss:Type="String">Total Approvals:</Data></Cell>\n';
-  xml += '  <Cell ss:StyleID="infoValue"><Data ss:Type="Number">' +
+  xml += '  <Cell ss:StyleID="data"><Data ss:Type="String">Total Rows</Data></Cell>\n';
+  xml += '  <Cell ss:StyleID="countNum"><Data ss:Type="Number">' +
     approvals.length +
     '</Data></Cell>\n';
   xml += '</Row>\n';
@@ -811,21 +1026,21 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   xml += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>\n';
 
   xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="section" ss:MergeAcross="1"><Data ss:Type="String">Approvals by Submission Type</Data></Cell>\n';
+  xml += '  <Cell ss:StyleID="section" ss:MergeAcross="1"><Data ss:Type="String">Submission Classification Counts</Data></Cell>\n';
   xml += '</Row>\n';
 
   xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Submission Type</Data></Cell>\n';
+  xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Submission Classification</Data></Cell>\n';
   xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Count</Data></Cell>\n';
   xml += '</Row>\n';
 
-  for (var t in typeCounts) {
+  for (var cls in classificationCounts) {
     xml += '<Row>\n';
     xml += '  <Cell ss:StyleID="data"><Data ss:Type="String">' +
-      escapeXml(t) +
+      escapeXml(cls) +
       '</Data></Cell>\n';
     xml += '  <Cell ss:StyleID="countNum"><Data ss:Type="Number">' +
-      typeCounts[t] +
+      classificationCounts[cls] +
       '</Data></Cell>\n';
     xml += '</Row>\n';
   }
@@ -833,69 +1048,21 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   xml += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>\n';
 
   xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="section" ss:MergeAcross="1"><Data ss:Type="String">Approvals by Approval Type</Data></Cell>\n';
+  xml += '  <Cell ss:StyleID="section" ss:MergeAcross="1"><Data ss:Type="String">Specialty Counts</Data></Cell>\n';
   xml += '</Row>\n';
 
   xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Approval Type</Data></Cell>\n';
+  xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Therapeutic Specialty Category</Data></Cell>\n';
   xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Count</Data></Cell>\n';
   xml += '</Row>\n';
 
-  for (var atIndex = 0; atIndex < approvalTypeKeys.length; atIndex++) {
-    var at = approvalTypeKeys[atIndex];
-
+  for (var spec in specialtyCounts) {
     xml += '<Row>\n';
     xml += '  <Cell ss:StyleID="data"><Data ss:Type="String">' +
-      escapeXml(at) +
+      escapeXml(spec) +
       '</Data></Cell>\n';
     xml += '  <Cell ss:StyleID="countNum"><Data ss:Type="Number">' +
-      approvalTypeCounts[at] +
-      '</Data></Cell>\n';
-    xml += '</Row>\n';
-  }
-
-  xml += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>\n';
-
-  xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="section" ss:MergeAcross="1"><Data ss:Type="String">Approvals by Specialty</Data></Cell>\n';
-  xml += '</Row>\n';
-
-  xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Specialty</Data></Cell>\n';
-  xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Count</Data></Cell>\n';
-  xml += '</Row>\n';
-
-  for (var s = 0; s < specKeys.length; s++) {
-    xml += '<Row>\n';
-    xml += '  <Cell ss:StyleID="data"><Data ss:Type="String">' +
-      escapeXml(specKeys[s]) +
-      '</Data></Cell>\n';
-    xml += '  <Cell ss:StyleID="countNum"><Data ss:Type="Number">' +
-      specCounts[specKeys[s]] +
-      '</Data></Cell>\n';
-    xml += '</Row>\n';
-  }
-
-  xml += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>\n';
-
-  xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="section" ss:MergeAcross="1"><Data ss:Type="String">Top Sponsors</Data></Cell>\n';
-  xml += '</Row>\n';
-
-  xml += '<Row>\n';
-  xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Sponsor</Data></Cell>\n';
-  xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">Count</Data></Cell>\n';
-  xml += '</Row>\n';
-
-  var maxSponsors = Math.min(sponsorKeys.length, 10);
-
-  for (var sp = 0; sp < maxSponsors; sp++) {
-    xml += '<Row>\n';
-    xml += '  <Cell ss:StyleID="data"><Data ss:Type="String">' +
-      escapeXml(sponsorKeys[sp]) +
-      '</Data></Cell>\n';
-    xml += '  <Cell ss:StyleID="countNum"><Data ss:Type="Number">' +
-      sponsorCounts[sponsorKeys[sp]] +
+      specialtyCounts[spec] +
       '</Data></Cell>\n';
     xml += '</Row>\n';
   }
@@ -904,24 +1071,19 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   xml += '</Worksheet>\n';
 
   xml += '<Worksheet ss:Name="All Approvals">\n';
-  xml += '<Table ss:DefaultRowHeight="22">\n';
+  xml += '<Table ss:DefaultRowHeight="24">\n';
 
-  xml += '<Column ss:Width="30"/>\n';
-  xml += '<Column ss:Width="150"/>\n';
-  xml += '<Column ss:Width="180"/>\n';
-  xml += '<Column ss:Width="130"/>\n';
-  xml += '<Column ss:Width="90"/>\n';
-  xml += '<Column ss:Width="150"/>\n';
-  xml += '<Column ss:Width="220"/>\n';
-  xml += '<Column ss:Width="170"/>\n';
-  xml += '<Column ss:Width="110"/>\n';
-  xml += '<Column ss:Width="120"/>\n';
-  xml += '<Column ss:Width="80"/>\n';
-  xml += '<Column ss:Width="250"/>\n';
-  xml += '<Column ss:Width="400"/>\n';
+  var widths = [
+    150, 220, 100, 190, 430, 120,
+    220, 190, 170, 170, 130, 270
+  ];
+
+  for (var w = 0; w < widths.length; w++) {
+    xml += '<Column ss:Width="' + widths[w] + '"/>\n';
+  }
 
   xml += '<Row ss:Height="35">\n';
-  xml += '  <Cell ss:StyleID="title" ss:MergeAcross="12"><Data ss:Type="String">FDA Drug Approvals - ' +
+  xml += '  <Cell ss:StyleID="title" ss:MergeAcross="11"><Data ss:Type="String">Maddie-Style FDA Drug Approvals - ' +
     escapeXml(formatDateDisplay(fromDate)) +
     " to " +
     escapeXml(formatDateDisplay(toDate)) +
@@ -929,22 +1091,21 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   xml += '</Row>\n';
 
   var headers = [
-    "#",
+    "Manufacturer",
     "Drug Name",
-    "Generic Name",
-    "Specialty",
-    "Approval Date",
     "Submission Type",
+    "Therapeutic Specialty Category",
+    "Indication",
+    "Route of Admin",
+    "Submission Classification",
     "Approval Type",
     "Sponsor",
-    "Application #",
     "Dosage Form",
-    "Route",
-    "Active Ingredients",
-    "Indication / Use"
+    "Application #",
+    "Active Ingredients"
   ];
 
-  xml += '<Row ss:Height="30">\n';
+  xml += '<Row ss:Height="32">\n';
 
   for (var h = 0; h < headers.length; h++) {
     xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">' +
@@ -956,162 +1117,24 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
 
   for (var d = 0; d < approvals.length; d++) {
     var app = approvals[d];
-    var isAlt = d % 2 === 1;
-    var rowStyle = isAlt ? "dataAlt" : "data";
-    var nameStyle = isAlt ? "drugNameAlt" : "drugName";
+    var rowStyle = d % 2 === 1 ? "dataAlt" : "data";
 
     xml += '<Row>\n';
 
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="Number">' +
-      (d + 1) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + nameStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.drug_name) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.generic_name) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.specialty) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.approval_date) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.submission_type) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.approval_type) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.sponsor) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.application_number) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.dosage_form) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.route) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.active_ingredients) +
-      '</Data></Cell>\n';
-
-    xml += '  <Cell ss:StyleID="' + rowStyle + '"><Data ss:Type="String">' +
-      escapeXml(app.indication) +
-      '</Data></Cell>\n';
+    xml += makeCell(app.manufacturer, rowStyle);
+    xml += makeCell(app.drug_name, rowStyle);
+    xml += makeCell(app.submission_type, rowStyle);
+    xml += makeCell(app.therapeutic_specialty_category, rowStyle);
+    xml += makeCell(app.indication, rowStyle);
+    xml += makeCell(app.route_of_admin, rowStyle);
+    xml += makeCell(app.submission_classification, rowStyle);
+    xml += makeCell(app.approval_type, rowStyle);
+    xml += makeCell(app.sponsor, rowStyle);
+    xml += makeCell(app.dosage_form, rowStyle);
+    xml += makeCell(app.application_number, rowStyle);
+    xml += makeCell(app.active_ingredients, rowStyle);
 
     xml += '</Row>\n';
-  }
-
-  xml += '</Table>\n';
-  xml += '</Worksheet>\n';
-
-  xml += '<Worksheet ss:Name="By Specialty">\n';
-  xml += '<Table ss:DefaultRowHeight="22">\n';
-
-  xml += '<Column ss:Width="150"/>\n';
-  xml += '<Column ss:Width="180"/>\n';
-  xml += '<Column ss:Width="90"/>\n';
-  xml += '<Column ss:Width="150"/>\n';
-  xml += '<Column ss:Width="220"/>\n';
-  xml += '<Column ss:Width="170"/>\n';
-  xml += '<Column ss:Width="400"/>\n';
-
-  xml += '<Row ss:Height="35">\n';
-  xml += '  <Cell ss:StyleID="title" ss:MergeAcross="6"><Data ss:Type="String">Approvals Grouped by Specialty</Data></Cell>\n';
-  xml += '</Row>\n';
-
-  for (var sk = 0; sk < specKeys.length; sk++) {
-    var specName = specKeys[sk];
-
-    xml += '<Row ss:Height="28">\n';
-    xml += '  <Cell ss:StyleID="specGroup" ss:MergeAcross="6"><Data ss:Type="String">' +
-      escapeXml(specName) +
-      " (" +
-      specCounts[specName] +
-      ")" +
-      '</Data></Cell>\n';
-    xml += '</Row>\n';
-
-    var specHeaders = [
-      "Drug Name",
-      "Generic Name",
-      "Approval Date",
-      "Submission Type",
-      "Approval Type",
-      "Sponsor",
-      "Indication"
-    ];
-
-    xml += '<Row>\n';
-
-    for (var sh = 0; sh < specHeaders.length; sh++) {
-      xml += '  <Cell ss:StyleID="header"><Data ss:Type="String">' +
-        escapeXml(specHeaders[sh]) +
-        '</Data></Cell>\n';
-    }
-
-    xml += '</Row>\n';
-
-    var rowCount = 0;
-
-    for (var sd = 0; sd < approvals.length; sd++) {
-      if (approvals[sd].specialty === specName) {
-        var isAlt2 = rowCount % 2 === 1;
-        var rs = isAlt2 ? "dataAlt" : "data";
-        var ns = isAlt2 ? "drugNameAlt" : "drugName";
-
-        xml += '<Row>\n';
-
-        xml += '  <Cell ss:StyleID="' + ns + '"><Data ss:Type="String">' +
-          escapeXml(approvals[sd].drug_name) +
-          '</Data></Cell>\n';
-
-        xml += '  <Cell ss:StyleID="' + rs + '"><Data ss:Type="String">' +
-          escapeXml(approvals[sd].generic_name) +
-          '</Data></Cell>\n';
-
-        xml += '  <Cell ss:StyleID="' + rs + '"><Data ss:Type="String">' +
-          escapeXml(approvals[sd].approval_date) +
-          '</Data></Cell>\n';
-
-        xml += '  <Cell ss:StyleID="' + rs + '"><Data ss:Type="String">' +
-          escapeXml(approvals[sd].submission_type) +
-          '</Data></Cell>\n';
-
-        xml += '  <Cell ss:StyleID="' + rs + '"><Data ss:Type="String">' +
-          escapeXml(approvals[sd].approval_type) +
-          '</Data></Cell>\n';
-
-        xml += '  <Cell ss:StyleID="' + rs + '"><Data ss:Type="String">' +
-          escapeXml(approvals[sd].sponsor) +
-          '</Data></Cell>\n';
-
-        xml += '  <Cell ss:StyleID="' + rs + '"><Data ss:Type="String">' +
-          escapeXml(approvals[sd].indication) +
-          '</Data></Cell>\n';
-
-        xml += '</Row>\n';
-
-        rowCount++;
-      }
-    }
-
-    xml += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>\n';
   }
 
   xml += '</Table>\n';
@@ -1139,4 +1162,15 @@ function generateFormattedExcel(approvals, fromDate, toDate) {
   document.body.removeChild(link);
 
   URL.revokeObjectURL(url);
+}
+
+
+function makeCell(value, styleId) {
+  return (
+    '  <Cell ss:StyleID="' +
+    styleId +
+    '"><Data ss:Type="String">' +
+    escapeXml(value || "N/A") +
+    '</Data></Cell>\n'
+  );
 }
