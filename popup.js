@@ -863,7 +863,7 @@ function generateFDAExcel(approvals, fromDate, toDate) {
   xml += '<Worksheet ss:Name="FDA Approvals">\n';
   xml += '<Table ss:DefaultRowHeight="18">\n';
 
-  var colWidths = [150, 180, 120, 170, 420, 145, 125, 125, 125, 260, 700];
+  var colWidths = [150, 180, 120, 170, 420, 145, 125, 125, 125, 300, 700];
   for (var w = 0; w < colWidths.length; w++) {
     xml += '<Column ss:Width="' + colWidths[w] + '"/>\n';
   }
