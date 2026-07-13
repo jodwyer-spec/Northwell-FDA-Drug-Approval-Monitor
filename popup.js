@@ -142,8 +142,10 @@ function escapeXml(str) {
   s = s.split("&").join("&");  
   s = s.split("<").join("<");  
   s = s.split(">").join(">");  
-  s = s.split('"').join(""");  
-  s = s.split("'").join("'");  
+  var dq = String.fromCharCode(34);  
+  s = s.split(dq).join(""");  
+  var sq = String.fromCharCode(39);  
+  s = s.split(sq).join("'");  
   return s;  
 }  
 
