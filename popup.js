@@ -137,15 +137,15 @@ function normalizeManufacturer(value) {
 } 
 
 function escapeXml(str) {  
-  if (str === undefined || str === null) return "";
-
-  return String(str)  
-    .replace(/&/g, "&amp;")  
-    .replace(/</g, "&lt;")  
-    .replace(/>/g, "&gt;")  
-    .replace(/"/g, "&quot;")  
-    .replace(/'/g, "&apos;");  
-}
+  if (str === undefined || str === null) return "";  
+  var s = String(str);  
+  s = s.split("&").join("&");  
+  s = s.split("<").join("<");  
+  s = s.split(">").join(">");  
+  s = s.split('"').join(""");  
+  s = s.split("'").join("'");  
+  return s;  
+}  
 
 function getSubmissionClassification(sub) {  
   var code = cleanText(sub.submission_class_code);  
