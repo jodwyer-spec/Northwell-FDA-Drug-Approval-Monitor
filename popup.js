@@ -1039,7 +1039,7 @@ function generateFDAExcel(approvals, fromDate, toDate) {
     "PDUFA Date",
     "PDUFA Quarter",
     "PDUFA Year",
-    "Submission Classification"
+    "Submission Classification",
     "Approval Letter"
   ];
 
