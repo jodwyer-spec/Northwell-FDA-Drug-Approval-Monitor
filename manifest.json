@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Northwell FDA Drug Approval Monitor",
+  "name": "Northwell FDA Drug Approval Monitor Finalized",
   "version": "1.0",
   "description": "Download latest FDA drug approvals as an Excel report",
   "permissions": [
